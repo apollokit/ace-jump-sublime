@@ -79,9 +79,29 @@ def get_views_sel(views):
 class AceJumpCommand(sublime_plugin.WindowCommand):
     """Base command class for AceJump plugin"""
 
-    def run(self, current_buffer_only = False):
+    def run(self, current_buffer_only = False, remaining_commands = []):
+        """ Entry point for all main AceJump commands. 
+
+        This function will, before exit, make a call to chain_ace_jump in order to allow
+        continuation of a series of commands. This is necessary because we can't do concurrency in
+        sublime plugins.
+                
+        Args:
+            current_buffer_only: dunno (default: {False})
+            remaining_commands: a list of the remaining commands to be executed, with each element
+                in format [command_name, {'arg0': val0, 'arg1': val1, ...}]. E.g. ["scroll_lines",
+                {"amount": -20.0}]. These will be passed to a call of ChainAceJumpCommand. (default:
+                {[]})
+        """
+
         global ace_jump_active
         ace_jump_active = True
+
+        # mark that we're executing. This is a bit janky, we just grab the first view and add a
+        # setting to it. It'll be fine, everything's fine, I swear.
+        self.window.views()[0].set_status('kit_ace_jump_active', 'True')
+        # store off the remaining commands for later dispatch.
+        self.remaining_commands = remaining_commands
 
         self.char = ""
         self.target = ""
@@ -147,7 +167,8 @@ class AceJumpCommand(sublime_plugin.WindowCommand):
         self.window.run_command("hide_panel", {"cancel": True})
 
     def submit(self):
-        """Handles the behavior after closing the prompt"""
+        """Handles the behavior after closing the prompt. This is the exit point for the main
+        AceJump commands"""
         global next_search, mode, ace_jump_active
         next_search = False
 
@@ -160,12 +181,19 @@ class AceJumpCommand(sublime_plugin.WindowCommand):
 
         mode = 0
         ace_jump_active = False
+        self.window.views()[0].set_status('kit_ace_jump_active', 'False')
+
 
         """Saves changed views after jump is complete"""
         if self.save_files_after_jump:
           for view in self.changed_views:
             if not view.is_read_only() and not view.is_dirty():
               view.run_command("save")
+
+        # dispatch to ChainAceJumpCommand to finish things off. Note that we'll actually return here
+        # after, but there's no more code to execute to we'll return
+        self.window.run_command('chain_ace_jump', {'commands': self.remaining_commands})
+         
 
     def add_labels(self, regex):
         """Adds labels to characters matching the regex"""
